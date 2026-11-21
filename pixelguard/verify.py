@@ -7,6 +7,7 @@ file meta), and re-runs OCR on the output pixels.
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 
 from pydicom.dataset import Dataset
@@ -17,6 +18,8 @@ from .pixel import OCREngine, UnsupportedPixelData, load_pixels, scan_array
 from .metadata import is_standard_uid
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
+# Empty-equivalent values, including PixelGuard pseudonyms ("ANON^1A2B3C4D5E", "ANON1A2B3C4D5E").
+PLACEHOLDER_RE = re.compile(r"^(?:ANON\w*|ANONYMOUS|ANONYMIZED|REMOVED|UNKNOWN|N/?A|[A-Z]{2,8}\^?[0-9A-F]{8,})(?:\^+)?$")
 HIGH_RISK_MODALITIES = {"US", "SC", "OT", "XC", "ES", "GM", "SM", "DOC", "IVUS", "OP"}
 SCANNED_VRS = {"PN", "LO", "SH", "ST", "LT", "UT", "UC", "AE", "DA", "DT"}
 PATTERN_VRS = {"LO", "SH", "ST", "LT", "UT", "UC"}
@@ -81,7 +84,7 @@ def audit_metadata(ds: Dataset, known: KnownIdentifiers | None, cfg: Config, *, 
         if vr not in SCANNED_VRS:
             continue
         text = _text(elem.value)
-        if not text.strip() or text in pseudonyms or path.startswith("DeidentificationMethod"):
+        if not text.strip() or text in pseudonyms or path.startswith("DeidentificationMethod") or PLACEHOLDER_RE.match(text.strip().upper()):
             continue  # markers PixelGuard itself adds (method names, DCM code values)
         if known:
             for f in known.find(text):
@@ -143,7 +146,7 @@ def audit_pixels(ds: Dataset, known: KnownIdentifiers | None, cfg: Config, engin
             low.append(info)  # anatomy the OCR detector mistook for text
         elif d.decision in ("redact", "review") and d.box.confidence >= cfg.ocr_min_confidence:
             unknown.append(info)
-        elif d.decision == "review":
+        else:  # low-confidence detections (already redacted if at the border)
             low.append(info)
     if leaks:
         extra = f" (+{len(unknown)} unrecognised)" if unknown else ""
@@ -163,10 +166,17 @@ def audit_pixels(ds: Dataset, known: KnownIdentifiers | None, cfg: Config, engin
             checks.append(Check("pixel.method", WARN, f"'{cfg.redact_method.value}' redaction can leave text partially legible; solid fill is recommended"))
 
     found_any = bool(original_scan and original_scan.decisions)
-    if str(flags.get("BurnedInAnnotation", "")).upper() == "YES" and not found_any:
+    if flags.get("pixels_cleaned") and original_scan is None:
+        # Standalone audit of output whose header records Clean Pixel Data
+        # (DCM 113101): absence of text is expected; the re-scan above is the check.
+        pass
+    elif str(flags.get("BurnedInAnnotation", "")).upper() == "YES" and not found_any:
         checks.append(Check("risk.burned_in_flag", WARN, "header declares burned-in annotation but OCR found no text; review manually"))
-    if flags.get("Modality") in HIGH_RISK_MODALITIES and not found_any:
+    if flags.get("Modality") in HIGH_RISK_MODALITIES and not found_any and not (flags.get("pixels_cleaned") and original_scan is None):
         checks.append(Check("risk.modality", WARN, f"modality {flags.get('Modality')} commonly carries burned-in text but none was found; review manually"))
     if scan.n_frames > len(scan.frames_scanned):
-        checks.append(Check("risk.frame_sampling", WARN, f"OCR sampled {len(scan.frames_scanned)} of {scan.n_frames} frames; text appearing only in other frames would be missed"))
+        if scan.projections:
+            checks.append(Check("risk.frame_coverage", PASS, f"{len(scan.frames_scanned)} of {scan.n_frames} frames read individually; all frames covered via temporal max/min projections"))
+        else:
+            checks.append(Check("risk.frame_sampling", WARN, f"OCR sampled {len(scan.frames_scanned)} of {scan.n_frames} frames; text appearing only in other frames would be missed"))
     return checks

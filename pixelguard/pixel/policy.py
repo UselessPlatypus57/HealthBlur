@@ -61,7 +61,9 @@ def group_lines(boxes: list[TextBox]) -> list[list[TextBox]]:
 
 def normalize_ocr_text(text: str) -> str:
     """Undo common OCR spacing artefacts: "08 , 2021" -> "08, 2021"."""
-    return re.sub(r"\s+([,.:;/])", r"\1", text).strip()
+    text = re.sub(r"\s+([,.:;/])", r"\1", text)
+    text = re.sub(r"(\d)([.,])\s+(?=[\dSOILZ])", r"\1\2", text)  # "3. SMHz" -> "3.SMHz"
+    return text.strip()
 
 
 def decide(boxes: list[TextBox], known: KnownIdentifiers | None, cfg: Config, image_hw: tuple[int, int] | None = None) -> list[TextDecision]:
@@ -85,9 +87,12 @@ def decide(boxes: list[TextBox], known: KnownIdentifiers | None, cfg: Config, im
             bf = detect(text, known)
             strong = [f for f in bf if f.strength == "strong"]
             weak = [f for f in bf + line_f if f.strength == "weak"]
-            safe = not bf and is_clinical_text(text)
             confident = b.confidence >= cfg.ocr_min_confidence
+            # A garbled low-confidence reading can look harmless ("4857" for an
+            # MRN), so only trust "clinical" when the reading itself is confident.
+            safe = not bf and confident and is_clinical_text(text)
             implausible = max_h is not None and b.height > max_h  # anatomy mistaken for text
+            border = image_hw is not None and in_border(b, image_hw, cfg.border_zone_fraction)
             if strong:
                 decisions.append(_dec(b, "redact", strong))
             elif implausible:
@@ -100,6 +105,9 @@ def decide(boxes: list[TextBox], known: KnownIdentifiers | None, cfg: Config, im
                 decisions.append(_dec(b, "redact", weak))
             elif cfg.text_policy == TextPolicy.CONSERVATIVE and confident:
                 decisions.append(TextDecision(b, "redact", ["UNRECOGNIZED_TEXT"], ["policy:conservative-unrecognized-text"]))
+            elif cfg.text_policy == TextPolicy.CONSERVATIVE and border and not (b.area < 64 and b.confidence < 0.05):
+                # Detected but unreadable (tiny / faint) text at the image edge.
+                decisions.append(TextDecision(b, "redact", ["UNRECOGNIZED_TEXT"], ["policy:conservative-unreadable-border-text"]))
             else:
                 decisions.append(TextDecision(b, "review", ["UNRECOGNIZED_TEXT"], ["low-confidence-or-targeted-policy"]))
         # Clinical-looking words touching redacted PHI are part of the identifier.
@@ -116,6 +124,13 @@ def decide(boxes: list[TextBox], known: KnownIdentifiers | None, cfg: Config, im
                         break
         out.extend(decisions)
     return out
+
+
+def in_border(b: TextBox, image_hw: tuple[int, int], fraction: float) -> bool:
+    """Box centre lies in the outer margin where burned-in annotations live."""
+    h, w = image_hw
+    cx, cy = (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2
+    return cy < h * fraction or cy > h * (1 - fraction) or cx < w * fraction * 0.6 or cx > w * (1 - fraction * 0.6)
 
 
 def _adjacent(a: TextBox, b: TextBox) -> bool:

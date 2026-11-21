@@ -127,9 +127,11 @@ def merge_boxes(boxes: list[TextBox], iou_threshold: float = 0.4) -> list[TextBo
         if dup is None:
             kept.append(b)
         else:
-            # A wider detection of the same line ("Fitzgerald, Rowan" vs
-            # "Fitzgerald,") carries more context: keep the longer reading.
-            if len(b.text.strip()) > len(dup.text.strip()):
+            # A clearly wider detection of the same line ("Fitzgerald, Rowan"
+            # vs "Fitzgerald,") carries more context, so keep its reading unless
+            # it is far less certain than the narrower one (garbled re-read).
+            wider = (b.x1 - b.x0) > 1.15 * (dup.x1 - dup.x0)
+            if wider and len(b.text.strip()) > len(dup.text.strip()) and b.confidence >= 0.5 * dup.confidence:
                 dup.text = b.text
             dup.x0, dup.y0 = min(dup.x0, b.x0), min(dup.y0, b.y0)
             dup.x1, dup.y1 = max(dup.x1, b.x1), max(dup.y1, b.y1)

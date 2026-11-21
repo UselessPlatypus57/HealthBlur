@@ -52,3 +52,22 @@ def test_clinical_annotations_kept_and_huge_boxes_not_redacted():
     assert d["Se.4 Im:12"].decision == "keep"
     assert d["AX T2 FLAIR"].decision == "keep"
     assert d["0O"].decision == "review"
+
+
+def test_unreadable_border_text_redacted_in_conservative_only():
+    faint = [B(6, 6, 87, 14, "DLZ", 0.06)]  # tiny name the recogniser cannot read
+    assert _decisions(faint, TextPolicy.CONSERVATIVE)["DLZ"].decision == "redact"
+    assert _decisions(faint, TextPolicy.TARGETED)["DLZ"].decision == "review"
+    interior = [B(110, 120, 140, 130, "Ce", 0.03)]  # noise over anatomy is only flagged
+    assert _decisions(interior, TextPolicy.CONSERVATIVE)["Ce"].decision == "review"
+
+
+def test_low_confidence_reading_is_not_trusted_as_clinical():
+    # an MRN misread as a harmless short number must not be kept
+    d = _decisions([B(4, 15, 49, 28, "4857", 0.04)], TextPolicy.CONSERVATIVE)
+    assert d["4857"].decision == "redact"
+
+
+def test_ocr_comma_variants_in_names():
+    d = _decisions([B(4, 4, 58, 23, "Okafor;", 0.79), B(58, 3, 112, 25, "Casey", 1.0)])
+    assert d["Okafor;"].decision == "redact" and d["Casey"].decision == "redact"

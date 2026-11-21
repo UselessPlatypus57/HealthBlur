@@ -54,6 +54,14 @@ class Config:
     ocr_min_confidence: float = 0.25  # below this, unmatched text is only flagged
     ocr_max_frames: int = 3  # frames sampled from multi-frame objects
     ocr_all_frames: bool = False
+    ocr_projections: bool = True  # also OCR temporal max/min projections of multi-frame data
+    border_zoom: bool = True  # re-read enlarged, contrast-stretched top/bottom bands
+    border_zoom_scale: int = 3
+    border_band_fraction: float = 0.16
+    # Conservative policy: text *detected* within this margin is redacted even
+    # when it cannot be read (tiny / faint text). Interior detections that
+    # cannot be read are flagged instead, to avoid blacking out anatomy.
+    border_zone_fraction: float = 0.2
     pad_px: int = 3
     pad_ratio: float = 0.2  # extra padding relative to box height
 
@@ -61,6 +69,10 @@ class Config:
     verify: bool = True
     verify_pixels: bool = True
     quarantine_failures: bool = True
+    # If the audit still reads PHI (or, under the conservative policy, any
+    # unrecognised text) in the output, redact exactly those regions and
+    # re-audit once before deciding PASS / FAIL.
+    remediate: bool = True
 
     # Reporting
     report_previews: bool = False  # masked text previews (e.g. "D**^J***") in reports

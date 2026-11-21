@@ -51,7 +51,8 @@ LABEL_RE = re.compile(
     r"REFERRING|DOCTOR|OPERATOR|TECH|HOSP|HOSPITAL|INSTITUTION|STUDY\s*DATE|EXAM\s*DATE|DATE)\s*[:#]"
 )
 
-_LAST_FIRST = re.compile(r"^\s*([A-Z][A-Z'\-]+),\s*([A-Z][A-Z'\-]+)(?:\s+[A-Z]\.?)?\s*$")
+# "LAST, FIRST" - OCR often reads the comma as ";" or "."
+_LAST_FIRST = re.compile(r"^\s*([A-Z][A-Z'\-]+)\s?[,;.]\s*([A-Z][A-Z'\-]+)(?:\s+[A-Z]\.?)?\s*$")
 _FIRST_LAST = re.compile(r"^\s*([A-Z][A-Z'\-]{1,})\s+([A-Z][A-Z'\-]{2,})\s*$")
 
 

@@ -75,3 +75,13 @@ def test_known_identifiers_ignore_placeholders_and_unrelated_text():
 
 def test_mask_preview():
     assert mask("DOE^JANE") == "D**^J***"
+
+
+@pytest.mark.parametrize("text", ["3_", "SMHz", "Se:4 Im:lz", "GAIN 502", "W:4OO L:4O"])
+def test_ocr_slips_in_clinical_text(text):
+    assert is_clinical_text(text)
+
+
+@pytest.mark.parametrize("text", ["SOLO", "LIZ", "Okafor", "ZOE"])
+def test_slip_normalisation_does_not_whitelist_words(text):
+    assert not is_clinical_text(text)

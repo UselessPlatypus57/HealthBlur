@@ -30,7 +30,7 @@ Step 2: metadata-only clean-up + audit -> 6/6 files still show identifying text 
      file 0 (CT): DATE, ID, LABEL, NAME in the top-left, top-right corner(s)
      file 3 (US): ID, INSTITUTION, LABEL, NAME in the top-left, top-right corner(s)
      ...
-Step 3: full PixelGuard pipeline -> audit PASS 5, WARN 1, FAIL 0; 34 regions redacted.
+Step 3: full PixelGuard pipeline -> audit PASS 6, WARN 0, FAIL 0; 29 regions redacted.
 ```
 
 ## How it works
@@ -51,9 +51,13 @@ pixel stage looks for those exact strings and tolerates OCR slips
 
 **2. Pixel stage.**
 - Every frame is rendered to 8 bits in two ways (full range and the stored
-  VOI window), and each rendering is read with EasyOCR. Multi-frame objects
-  are sampled (first, middle and last frame by default; `--all-frames` reads
-  every frame).
+  VOI window), and each rendering is read with EasyOCR.
+- **Border zoom:** the top and bottom bands, where burned-in text lives, are
+  contrast-stretched, enlarged 3× and read again. This lets OCR read
+  9–10 px and low-contrast text that it can only locate at native size.
+- **Multi-frame coverage:** the first, middle and last frames are read
+  individually. So are temporal max and min projections across all frames,
+  so text shown in any frame is seen. `--all-frames` reads every frame.
 - Each text box is classified using:
   - known-identifier matches;
   - generic PHI patterns: `LAST^FIRST`, `Name:`/`DOB:`/`MRN:` labels, dates,
@@ -63,8 +67,12 @@ pixel stage looks for those exact strings and tolerates OCR slips
     `Se:2 Im:15`, `120 kVp`, `5 cm`, `TGC`…), which are **kept**.
 - Two policies:
   - `conservative` (default): redact all text except recognised clinical
-    annotations.
+    annotations. Text the detector **finds near the image edge but cannot
+    read** is redacted too. Unreadable detections over the anatomy are only
+    flagged, so the image itself isn't blacked out.
   - `targeted`: redact only text that matches a PHI rule.
+- A reading is trusted as "clinical" only when OCR is confident in it, so an
+  MRN misread as a short number is not kept.
 - Redaction works in the native pixel type. A solid fill is the default
   (display-black, so MONOCHROME1 is handled). `blur` and `pixelate` are
   available, but the audit flags them as weaker.
@@ -101,7 +109,14 @@ sequences and file meta, and re-runs OCR on the output pixels. Checks:
 | `metadata.uids` | any original instance UID remains |
 | `pixel.residual_text` | re-OCR still reads text matching a PHI rule (FAIL) or unrecognised text (WARN) |
 | `pixel.integrity` | pixels outside redaction boxes changed |
-| `risk.*` (WARN) | the header declares burned-in annotation but no text was found; high-risk modality (US, SC, OT…) with no text found; frames were sampled; weak redaction method |
+| `risk.*` (WARN) | the header declares burned-in annotation but no text was found; high-risk modality (US, SC, OT…) with no text found; frames were sampled without temporal projections; weak redaction method |
+
+**Remediation:** if the audit still reads PHI in the output (or, under the
+conservative policy, any unrecognised text), PixelGuard redacts exactly
+those regions and audits the file again, once. Faint text often becomes
+legible to OCR only after neighbouring text has been blacked out, which
+changes the image's contrast. The report records the extra regions and the
+first audit's result.
 
 `FAIL` files are moved to `_quarantine/`. A file that raises an error is
 never written, so the pipeline fails closed. `WARN` means the file passed
@@ -141,6 +156,9 @@ pixelguard deidentify path\to\dicoms -o clean_out
 
 # Options
 pixelguard deidentify in -o out --policy targeted --dates shift --key-file secret.txt --workers 3
+
+# About 2x faster: skips border zoom and multi-frame projections (more false positives and warnings)
+pixelguard deidentify in -o out --fast
 
 # Read-only scan: what PHI is where?
 pixelguard scan path\to\dicoms --json findings.json
@@ -197,28 +215,43 @@ Test set:
 
 | variant | pixel PHI recall (normal / hard) | pixel FP rate | metadata PHI recall | clinical attribute retention | audit PASS / PASS+WARN / FAIL | throughput |
 |---|---|---|---|---|---|---|
-| metadata-only (baseline) | 0 % / 0 % | – | 100 % | 100 % | 0 / 0 / **30** | 16.6 files/min |
-| targeted | 98.9 % / 77.4 % | 0.0 % | 100 % | 100 % | 23 / 30 / 0 | 9.0 files/min |
-| **conservative** (default) | **100 % / 77.4 %** | 4.4 % | 100 % | 100 % | 25 / 30 / 0 | 9.0 files/min |
+| metadata-only (baseline) | 0 % / 0 % | – | 100 % | 100 % | 0 / 0 / **30** | 8.5 files/min |
+| targeted | 100 % / 80.6 % | 1.1 % | 100 % | 100 % | 28 / 30 / 0 | 4.2 files/min |
+| conservative `--fast` | 100 % / 100 % | 10.0 % | 100 % | 100 % | 25 / 30 / 0 | 8.9 files/min |
+| **conservative** (default) | **100 % / 100 %** | **3.3 %** | 100 % | 100 % | **30 / 30 / 0** | 4.5 files/min |
 
 How to read this:
 - **The metadata-only baseline leaks in every file.** Each one still shows
-  PHI in its pixels, and the audit catches all 30 (FAIL, quarantined).
-- **Conservative** redacted every PHI region in the normal cases. Its
-  4.4 % false-positive rate comes from clinical labels that OCR misread
-  badly enough that they no longer matched the clinical vocabulary.
-- **Targeted** keeps every clinical label, but misses PHI that matches no
-  rule, for example a bare "First Last" name read only in part.
-- **Hard cases are the weak spot.** Tiny, low-contrast text is only partly
-  found.
-- **Important:** those hard-case misses still passed the audit, because the
-  audit re-reads pixels with the same OCR engine. Text the OCR cannot read
-  is invisible to both steps. The audit pass rate is therefore an *upper
-  bound* on safety, not proof of it. Keep human review in the loop,
-  especially for ultrasound and screen captures.
-- Throughput is on a 12-thread CPU with 3 workers and no GPU. Each file is
-  read by OCR twice for cleaning and twice for auditing (two renderings each
-  time). `--no-verify` roughly halves the time, but is not recommended.
+  PHI in its pixels, and the audit catches all 30 (FAIL, quarantined). Even
+  this baseline is slower than a header-only tool would be, because the
+  audit still OCRs the pixels.
+- **Conservative** (the default) redacted all 118 PHI regions, including the
+  tiny, faint hard cases. Two mechanisms make that possible:
+  - Border zoom makes small text readable.
+  - Text the detector finds near the edge but still cannot read is
+    redacted anyway.
+
+  Its 3.3 % false positives are 9–10 px clinical labels such as `SUPINE` and
+  `AX T2 FLAIR`, which OCR misreads too badly to recognise. Matching is kept
+  strict on purpose: a looser match could pass a surname off as a clinical
+  word.
+- **`--fast`** skips border zoom and projections. It finds the same PHI,
+  through the "unreadable border text" rule, at twice the speed. The costs:
+  - more clinical labels are blacked out;
+  - every multi-frame file gets a frame-sampling WARN.
+- **Targeted** keeps nearly every clinical label but only removes text it
+  can identify as PHI, so faint, unreadable PHI can remain. In this run:
+  - The audit caught 2 such files.
+  - Remediation redacted the leaked regions and both then passed.
+  - The 2 WARNs flag the leftover unreadable text for review.
+- **Caveat:** the audit re-reads pixels with the same OCR engine, so text
+  that OCR cannot even detect is invisible to both steps. The audit pass
+  rate is an *upper bound* on safety, not proof of it. Keep human review in
+  the loop, especially for ultrasound and screen captures.
+- Throughput is on a 12-thread CPU with 3 workers and no GPU. The default
+  reads each file in several views (full image, VOI window, zoomed borders,
+  and multi-frame projections), once to clean and again to audit.
+  `--no-verify` roughly halves the time, but is not recommended.
 
 These numbers come from synthetic data with known ground truth. They show
 how the configurations compare. They are **not** evidence of performance on
@@ -243,7 +276,7 @@ recall needs box annotations, so for external data rely on
 ## Tests
 
 ```powershell
-pytest              # 70 fast tests (fake OCR replays ground truth)
+pytest              # 89 fast tests (fake OCR replays ground truth)
 pytest -m ocr       # end-to-end with the real EasyOCR model
 ```
 

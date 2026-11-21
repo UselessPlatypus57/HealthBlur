@@ -25,6 +25,7 @@ import numpy as np
 import pydicom
 
 from .metadata import CLINICAL_KEEP
+from .pixel.redact import mask_from_boxes
 from .verify import walk
 
 
@@ -76,9 +77,15 @@ def evaluate_synthetic(truth_dir: Path, report: dict, out_root: Path, inputs: li
             continue
         pixel = rec.get("pixel") or {}
         boxes = pixel.get("redacted_boxes_padded", []) if pixel.get("performed") else []
+        regions = pixel.get("text_regions", [])
+        exact = [d["bbox"] for d in regions if d["decision"] == "redact"]
+        keepb = [d["bbox"] for d in regions if d["decision"] == "keep"]
+        h, w = t["shape"]
+        real_mask = mask_from_boxes((h, w), boxes, exact, keepb) if boxes else np.zeros((h, w), bool)
         f_phi = f_hit = 0
         for g in t["pixel_regions"]:
-            cov = _coverage(g["bbox"], boxes)
+            x0, y0, x1, y1 = g["bbox"]
+            cov = float(real_mask[y0:y1, x0:x1].mean()) if x1 > x0 and y1 > y0 else 1.0
             if g["is_phi"]:
                 ok = cov >= 0.9
                 phi_total += 1
@@ -95,10 +102,7 @@ def evaluate_synthetic(truth_dir: Path, report: dict, out_root: Path, inputs: li
                 clin_total += 1
                 clin_fp += cov >= 0.5
         if boxes:
-            h, w = t["shape"]
-            rmask = np.zeros((h, w), bool)
-            for x0, y0, x1, y1 in boxes:
-                rmask[y0:y1, x0:x1] = True
+            rmask = real_mask
             gmask = np.zeros((h, w), bool)
             for g in t["pixel_regions"]:
                 x0, y0, x1, y1 = g["bbox"]

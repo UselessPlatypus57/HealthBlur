@@ -45,11 +45,14 @@ _TOKEN_SPLIT = re.compile(r"[\s:=]+")
 
 
 def tokens(text: str) -> list[str]:
-    return [t.strip("()[],;") for t in _TOKEN_SPLIT.split(text.upper()) if t.strip("()[],;")]
+    junk = "()[],;_'\"`/|"
+    return [t.strip(junk) for t in _TOKEN_SPLIT.split(text.upper()) if t.strip(junk)]
 
 
-_NUMERIC_SLIP = re.compile(r"^([0-9SOIL.,]+?)(MHZ|KHZ|HZ|MM|CM|KVP|KV|MAS|MA|MS|DB|FPS|%)?$")
-_DIGIT_FIX = str.maketrans({"S": "5", "O": "0", "I": "1", "L": "1"})
+_NUMERIC_SLIP = re.compile(r"^([0-9SOILZ.,]+?)(MHZ|KHZ|HZ|MM|CM|KVP|KV|MAS|MA|MS|DB|FPS|%)?$")
+_DIGIT_FIX = str.maketrans({"S": "5", "O": "0", "I": "1", "L": "1", "Z": "2"})
+# Labels that are followed by a short number ("Se:4", "W:400", "GAIN 50").
+_NUMBER_LABELS = frozenset("SE IM SER IMG SL EX FR DR TR TE TI W L C WL WW GAIN DEPTH FOV THK".split())
 _FUZZY_VOCAB = sorted(t for t in CLINICAL_TOKENS if len(t) >= 4)
 
 
@@ -62,10 +65,13 @@ def is_clinical_token(tok: str) -> bool:
         return True
     # OCR digit slips inside measurements: 3.SMHZ -> 3.5MHZ, 1O CM -> 10CM
     m = _NUMERIC_SLIP.match(tok)
-    if m and any(ch.isdigit() for ch in m.group(1)):
+    if m and (any(ch.isdigit() for ch in m.group(1)) or m.group(2)):
         fixed = m.group(1).translate(_DIGIT_FIX) + (m.group(2) or "")
         if fixed != tok and any(p.match(fixed) for p in _CLINICAL_TOKEN_PATTERNS):
             return True
+    if tok.startswith("X") and len(tok) > 1 and set(tok[1:]) <= set("0123456789SOILZ.,"):
+        if any(p.match("X" + tok[1:].translate(_DIGIT_FIX)) for p in _CLINICAL_TOKEN_PATTERNS):
+            return True  # xl.5 -> x1.5
     # tolerate one OCR slip in longer clinical words (FLAR -> FLAIR)
     return len(tok) >= 4 and tok.isalpha() and bool(get_close_matches(tok, _FUZZY_VOCAB, n=1, cutoff=0.85))
 
@@ -75,4 +81,11 @@ def is_clinical_text(text: str) -> bool:
     toks = tokens(text)
     if not toks:
         return True
-    return all(is_clinical_token(t) for t in toks)
+    for i, t in enumerate(toks):
+        if is_clinical_token(t):
+            continue
+        # "Im:lz" -> "Im:12": a short digit-like token right after a number label
+        if i and toks[i - 1] in _NUMBER_LABELS and len(t) <= 4 and t.translate(_DIGIT_FIX).isdigit():
+            continue
+        return False
+    return True

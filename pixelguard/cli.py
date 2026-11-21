@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ def _add_cfg_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("--no-patient-characteristics", action="store_true", help="also remove sex/age/size/weight")
     g.add_argument("--min-confidence", type=float, default=0.25, help="OCR confidence below which unmatched text is only flagged")
     g.add_argument("--all-frames", action="store_true", help="OCR every frame of multi-frame objects (slow)")
+    g.add_argument("--fast", action="store_true", help="skip border zoom and temporal projections (about 2x faster, misses small/faint text)")
     g.add_argument("--no-verify", action="store_true", help="skip the post-anonymization audit (not recommended)")
     g.add_argument("--no-quarantine", action="store_true", help="leave failing outputs in place instead of moving them to _quarantine/")
     g.add_argument("--report-previews", action="store_true", help="include masked previews (e.g. 'D**^J***') of redacted text in reports")
@@ -46,6 +48,8 @@ def _cfg(a) -> Config:
         verify=not a.no_verify,
         quarantine_failures=not a.no_quarantine,
         report_previews=a.report_previews,
+        border_zoom=not a.fast,
+        ocr_projections=not a.fast,
     )
     key = a.key or os.environ.get("PIXELGUARD_KEY")
     if a.key_file:
@@ -135,7 +139,8 @@ def cmd_audit(a) -> int:
             if extra:
                 known.merge(extra)
             rec["modality"] = str(ds.get("Modality", ""))
-            flags = {"Modality": rec["modality"], "BurnedInAnnotation": str(ds.get("BurnedInAnnotation", ""))}
+            flags = {"Modality": rec["modality"], "BurnedInAnnotation": str(ds.get("BurnedInAnnotation", "")),
+                     "pixels_cleaned": any(str(getattr(i, "CodeValue", "")) == "113101" for i in ds.get("DeidentificationMethodCodeSequence", []) or [])}
             # The header itself is the thing being audited: identifiers harvested
             # from it are only meaningful if they are not placeholders.
             checks = audit_metadata(ds, None, cfg)
@@ -159,11 +164,14 @@ def cmd_audit(a) -> int:
     return 0 if rep["summary"]["status_counts"]["FAIL"] == 0 else 1
 
 
+from .verify import PLACEHOLDER_RE as _PLACEHOLDER_RE  # noqa: E402
+
+
 def _header_identity_check(ds):
     from .verify import FAIL, WARN, Check
 
     present = [kw for kw in ("PatientName", "PatientID", "PatientBirthDate", "AccessionNumber", "InstitutionName", "ReferringPhysicianName", "PatientAddress")
-               if str(ds.get(kw, "") or "").strip() and str(ds.get(kw, "")).upper() not in ("ANONYMOUS", "ANON", "REMOVED")]
+               if str(ds.get(kw, "") or "").strip() and not _PLACEHOLDER_RE.match(str(ds.get(kw, "")).strip().upper())]
     removed = str(ds.get("PatientIdentityRemoved", "")).upper() == "YES"
     if present:
         return Check("metadata.header_identifiers", FAIL if removed else WARN, f"identifying attributes populated: {', '.join(present)}", present)
@@ -234,8 +242,10 @@ def cmd_benchmark(a) -> int:
     variants = [v.strip() for v in a.variants.split(",") if v.strip()]
     table = []
     for v in variants:
-        cfg = Config(text_policy=TextPolicy.TARGETED if v == "targeted" else TextPolicy.CONSERVATIVE,
-                     clean_pixels=v != "metadata-only", secret_key=Config.key_from_text("benchmark"))
+        fast = v.endswith("-fast")
+        cfg = Config(text_policy=TextPolicy.TARGETED if v.startswith("targeted") else TextPolicy.CONSERVATIVE,
+                     clean_pixels=v != "metadata-only", secret_key=Config.key_from_text("benchmark"),
+                     border_zoom=not fast, ocr_projections=not fast)
         out = root / v
         print(f"\n== {v}: {len(inputs)} files")
         rep = run_batch(inputs, out, cfg, workers=a.workers, progress=_progress if a.verbose else None)
@@ -359,7 +369,8 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--output", default="benchmark_out")
     b.add_argument("--n", type=int, default=36)
     b.add_argument("--seed", type=int, default=7)
-    b.add_argument("--variants", default="metadata-only,targeted,conservative")
+    b.add_argument("--variants", default="metadata-only,targeted,conservative-fast,conservative",
+                   help="comma list of: metadata-only, targeted, conservative, and *-fast versions")
     b.add_argument("--workers", type=int, default=1)
     b.add_argument("--regenerate", action="store_true")
     b.add_argument("-v", "--verbose", action="store_true")

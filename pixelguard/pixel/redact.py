@@ -14,10 +14,20 @@ def padded(box: TextBox, shape_hw: tuple[int, int], cfg: Config) -> tuple[int, i
     return max(0, box.x0 - pad), max(0, box.y0 - pad), min(w, box.x1 + pad), min(h, box.y1 + pad)
 
 
-def build_mask(shape_hw: tuple[int, int], boxes: list[TextBox], cfg: Config) -> np.ndarray:
+def build_mask(shape_hw: tuple[int, int], boxes: list[TextBox], cfg: Config, keep: list[TextBox] | None = None) -> np.ndarray:
+    """Padded redaction boxes, minus kept clinical text that the padding of a
+    neighbouring box would otherwise clip (the unpadded PHI box always wins)."""
+    return mask_from_boxes(shape_hw, [padded(b, shape_hw, cfg) for b in boxes],
+                           [(b.x0, b.y0, b.x1, b.y1) for b in boxes], [(b.x0, b.y0, b.x1, b.y1) for b in keep or []])
+
+
+def mask_from_boxes(shape_hw, padded_boxes, exact_boxes=(), keep_boxes=()) -> np.ndarray:
     mask = np.zeros(shape_hw, dtype=bool)
-    for b in boxes:
-        x0, y0, x1, y1 = padded(b, shape_hw, cfg)
+    for x0, y0, x1, y1 in padded_boxes:
+        mask[y0:y1, x0:x1] = True
+    for x0, y0, x1, y1 in keep_boxes:
+        mask[y0:y1, x0:x1] = False
+    for x0, y0, x1, y1 in exact_boxes:
         mask[y0:y1, x0:x1] = True
     return mask
 
@@ -53,7 +63,8 @@ def apply_redaction(arr: np.ndarray, mask: np.ndarray, boxes: list[tuple[int, in
             info = np.iinfo(arr.dtype) if np.issubdtype(arr.dtype, np.integer) else None
             if info is not None:
                 region = np.clip(np.rint(region), info.min, info.max)
-            out[f, y0:y1, x0:x1] = region.astype(arr.dtype)
+            m = mask[y0:y1, x0:x1]
+            out[f, y0:y1, x0:x1][m] = region.astype(arr.dtype)[m]
     return out
 
 

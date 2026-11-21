@@ -80,3 +80,40 @@ def test_output_paths_contain_no_phi(synth_dir, gt_engine, truths, tmp_path):
     for r in rep["files"]:
         for t in truths.values():
             assert t["patient_key"] not in r["output"]
+
+
+class _BlindFirstOCR:
+    """Wraps the ground-truth OCR but 'cannot read' the name during cleaning,
+    as happens with faint text; the audit then sees it and remediation fixes it."""
+
+    name = "blind-first"
+
+    def __init__(self, inner):
+        self.inner, self.cleaning = inner, True
+
+    def detect(self, img):
+        boxes = self.inner.detect(img)
+        if self.cleaning:
+            return [b for b in boxes if "^" not in b.text and "," not in b.text and "Name" not in b.text]
+        return boxes
+
+
+def test_remediation_fixes_leak_found_by_audit(synth_dir, gt_engine, truths, tmp_path, monkeypatch):
+    import pixelguard.pipeline as pl
+
+    name = next(f for f, t in sorted(truths.items()) if any("^" in g["text"] for g in t["pixel_regions"]))
+    eng = _BlindFirstOCR(gt_engine)
+    real_audit = pl.audit_pixels
+
+    def audit(*a, **k):
+        a[3].cleaning = False  # the engine passed to the audit can now "read" the name
+        return real_audit(*a, **k)
+
+    monkeypatch.setattr(pl, "audit_pixels", audit)
+    rec = process_file(synth_dir / name, tmp_path / "out", Config(text_policy=TextPolicy.TARGETED), eng)
+    assert rec.get("remediation", {}).get("regions_redacted", 0) >= 1, rec["checks"]
+    assert rec["status"] in ("PASS", "WARN"), rec["checks"]
+    assert any(c["id"] == "pixel.integrity" and c["status"] == "PASS" for c in rec["checks"])
+
+    rec2 = process_file(synth_dir / name, tmp_path / "out2", Config(text_policy=TextPolicy.TARGETED, remediate=False), _BlindFirstOCR(gt_engine))
+    assert rec2["status"] == "FAIL" and rec2["output"].startswith("_quarantine/")

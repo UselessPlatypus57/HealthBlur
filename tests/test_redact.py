@@ -49,3 +49,14 @@ def test_signed_pixels():
     arr = np.random.default_rng(4).integers(-1024, 3000, (1, 32, 64), dtype=np.int16)
     out, mask = _case(arr, "MONOCHROME2")
     assert (out[0][mask] == arr.min()).all()
+
+
+def test_padding_does_not_clip_kept_clinical_text():
+    cfg = Config()
+    phi = TextBox(10, 10, 60, 20, "DOE^JANE", 1.0)
+    kept = TextBox(10, 22, 60, 30, "R", 1.0)  # just below, inside phi's padding
+    m = build_mask((64, 64), [phi], cfg, [kept])
+    assert m[10:20, 10:60].all()  # PHI fully covered
+    assert not m[22:30, 10:60].any()  # clinical label untouched
+    m2 = build_mask((64, 64), [phi], cfg)
+    assert m2[22:24, 10:60].any()  # without the carve-out padding would clip it

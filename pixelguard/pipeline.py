@@ -140,31 +140,50 @@ def process_file(src: Path, out_root: Path, cfg: Config, engine: OCREngine | Non
         os.replace(tmp, dst)
         timings["write"] = time.perf_counter() - t
 
-        if preview_dir is not None and pr is not None and pr.before_preview is not None:
-            _save_png(pr.before_preview, preview_dir / f"{index:05d}_before.png")
-            _save_png(pr.after_preview, preview_dir / f"{index:05d}_after.png")
-
         # ---- audit (on the file as written)
+        def run_audit() -> list[Check]:
+            written = pydicom.dcmread(str(dst))
+            out = audit_metadata(written, known, cfg, original_uids=meta.original_uids, pseudonyms=meta.pseudonyms)
+            if pr is not None and pr.skipped_reason:
+                out.append(Check("pixel.residual_text", FAIL, f"pixel cleaning not possible: {pr.skipped_reason}"))
+            else:
+                out += audit_pixels(written, known, cfg, engine, pixel_result=pr, original_scan=pr.scan if pr else None, original_flags=flags)
+            return out
+
         checks: list[Check] = []
         if cfg.verify:
             t = time.perf_counter()
-            written = pydicom.dcmread(str(dst))
-            checks += audit_metadata(written, known, cfg, original_uids=meta.original_uids, pseudonyms=meta.pseudonyms)
-            if pr is not None and pr.skipped_reason:
-                checks.append(Check("pixel.residual_text", FAIL, f"pixel cleaning not possible: {pr.skipped_reason}"))
-            else:
-                checks += audit_pixels(written, known, cfg, engine, pixel_result=pr, original_scan=pr.scan if pr else None, original_flags=flags)
+            checks = run_audit()
             timings["verify"] = time.perf_counter() - t
-            if preview_dir is not None and pr is None and "PixelData" in written:
+            resid = next((c for c in checks if c.id == "pixel.residual_text"), None)
+            needs_fix = resid is not None and resid.details and (
+                resid.status == FAIL or (resid.status == WARN and cfg.text_policy.value == "conservative"))
+            if cfg.remediate and pr is not None and pr.performed and needs_fix:
+                from .pixel import remediate
+
+                t = time.perf_counter()
+                fixed = pydicom.dcmread(str(dst))
+                n = remediate(fixed, pr, [d["bbox"] for d in resid.details if "bbox" in d], cfg, keep_previews=preview_dir is not None)
+                fixed.save_as(str(tmp), enforce_file_format=True)
+                os.replace(tmp, dst)
+                checks = run_audit()
+                timings["remediation"] = time.perf_counter() - t
+                rec["remediation"] = {"regions_redacted": n, "first_audit": resid.message}
+                rec["pixel"] = pr.to_dict(cfg.report_previews or preview_dir is not None)
+            if preview_dir is not None and pr is None:
                 from .pixel import load_pixels, preview_u8
 
                 try:
+                    written = pydicom.dcmread(str(dst))
                     a, _ = load_pixels(written)
                     _save_png(preview_u8(a, written), preview_dir / f"{index:05d}_after.png")
                 except Exception:
                     pass
         else:
             checks.append(Check("audit", WARN, "verification disabled"))
+        if preview_dir is not None and pr is not None and pr.before_preview is not None:
+            _save_png(pr.before_preview, preview_dir / f"{index:05d}_before.png")
+            _save_png(pr.after_preview, preview_dir / f"{index:05d}_after.png")
         rec["checks"] = [c.to_dict() for c in checks]
         rec["status"] = overall(checks)
 
