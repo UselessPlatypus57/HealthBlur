@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+
+# Local tooling
+.claude/
+CLAUDE.md
+.vscode/
+.idea/
+
+# Never commit imaging data or run output: it may contain PHI.
+*.dcm
+data/
+runs/
+output/
+out/
+benchmark_out/
+pixelguard_jobs/
+*.linkage.csv
+*.log
+demo_out/
+pixelguard_audit/

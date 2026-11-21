@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PixelGuard</title>
+<style>
+:root{
+  --bg:#f5f6f8;--panel:#ffffff;--ink:#16191d;--mut:#5d6672;--line:#dde1e6;--soft:#eef1f4;
+  --accent:#2457d6;--pass:#1a7f37;--warn:#b26a00;--fail:#cf222e;--keep:#1a7f37;--review:#b26a00;
+  --mono:ui-monospace,SFMono-Regular,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0f1216;--panel:#171b21;--ink:#e7ebf0;--mut:#98a2ae;--line:#2a313a;--soft:#1f252d;--accent:#6b97ff;
+  --pass:#3fb950;--warn:#d29922;--fail:#f85149;--keep:#3fb950;--review:#d29922}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5}
+header h1{font-size:17px;margin:0;letter-spacing:.2px} header .ver{color:var(--mut);font-size:12px}
+.disc{margin-left:auto;font-size:12px;color:var(--warn);border:1px solid var(--warn);border-radius:999px;padding:3px 10px;cursor:help;white-space:nowrap}
+.wrap{display:grid;grid-template-columns:320px 1fr;gap:16px;padding:16px 20px;max-width:1500px;margin:0 auto}
+@media (max-width:900px){.wrap{grid-template-columns:1fr;padding:12px 16px}.disc{display:none}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}
+.panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--mut);margin:0 0 10px}
+label.field{display:block;font-size:12px;color:var(--mut);margin:8px 0 3px}
+select,input[type=number]{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);font:inherit}
+.drop{border:1.5px dashed var(--line);border-radius:8px;padding:18px 10px;text-align:center;color:var(--mut);cursor:pointer;transition:.15s}
+.drop.over,.drop:hover{border-color:var(--accent);color:var(--ink)}
+.drop b{color:var(--ink)}
+button{font:inherit;border-radius:6px;border:1px solid var(--line);background:var(--soft);color:var(--ink);padding:7px 12px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.check{display:flex;gap:6px;align-items:center;margin-top:10px;font-size:13px}
+.jobs{list-style:none;margin:0;padding:0}
+.jobs li{padding:8px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;gap:8px;align-items:center}
+.jobs li:hover{background:var(--soft)} .jobs li.sel{background:var(--soft);outline:1px solid var(--line)}
+.jobs .lbl{font-size:13px} .jobs .sub{font-size:11px;color:var(--mut)}
+.chip{display:inline-block;font-size:11px;font-weight:600;border-radius:999px;padding:1px 8px;color:#fff;white-space:nowrap}
+.PASS{background:var(--pass)} .WARN{background:var(--warn)} .FAIL,.ERROR{background:var(--fail)} .SKIPPED,.queued,.interrupted{background:#6e7781} .running{background:var(--accent)} .done{background:var(--pass)} .error{background:var(--fail)}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin:12px 0}
+.card{background:var(--soft);border-radius:8px;padding:10px 12px} .card b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+.card span{font-size:12px;color:var(--mut)}
+.bar{height:6px;background:var(--soft);border-radius:4px;overflow:hidden;margin-top:8px}.bar i{display:block;height:100%;background:var(--accent);transition:width .3s}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);font-weight:600}
+tbody tr.f{cursor:pointer} tbody tr.f:hover{background:var(--soft)} tbody tr.sel{background:var(--soft)}
+.tablewrap{overflow-x:auto}
+.issue{color:var(--mut);max-width:520px}
+.viewer{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+@media (max-width:700px){.viewer{grid-template-columns:1fr}}
+.img{position:relative;background:#000;border-radius:6px;overflow:hidden}
+.img img{display:block;width:100%;height:auto;image-rendering:auto}
+.img svg{position:absolute;inset:0;width:100%;height:100%}
+.imgcap{font-size:12px;font-weight:600;color:var(--mut);margin-bottom:4px}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--mut);margin-top:8px;flex-wrap:wrap}
+.sw{display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:-2px;margin-right:4px;border:2px solid}
+.checks{list-style:none;padding:0;margin:8px 0}
+.checks li{display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--line);font-size:13px}
+.checks code{font-family:var(--mono);font-size:12px;color:var(--mut);min-width:200px}
+.alert{border-left:4px solid var(--fail);background:color-mix(in srgb,var(--fail) 10%,transparent);padding:10px 12px;border-radius:4px;margin:10px 0}
+.alert.ok{border-color:var(--pass);background:color-mix(in srgb,var(--pass) 10%,transparent)}
+.mono{font-family:var(--mono);font-size:12px}
+.empty{color:var(--mut);padding:40px 10px;text-align:center}
+.tabs{display:flex;gap:4px;margin-top:14px;border-bottom:1px solid var(--line)}
+.tabs button{border:none;background:none;border-bottom:2px solid transparent;border-radius:0;padding:6px 10px;color:var(--mut)}
+.tabs button.on{border-color:var(--accent);color:var(--ink)}
+.muted{color:var(--mut)}
+</style>
+</head>
+<body>
+<header>
+  <h1>PixelGuard</h1><span class="ver" id="ver"></span>
+  <span class="disc" id="disc" title="">Not a guarantee of de-identification</span>
+</header>
+<div class="wrap">
+  <aside>
+    <div class="panel">
+      <h2>New run</h2>
+      <div class="drop" id="drop"><b>Drop DICOM files</b><br>or click to choose<input type="file" id="file" multiple hidden></div>
+      <div id="picked" class="muted" style="font-size:12px;margin-top:6px"></div>
+      <label class="field" for="policy">Burned-in text policy</label>
+      <select id="policy"><option value="conservative">Conservative: redact all non-clinical text</option><option value="targeted">Targeted: redact PHI matches only</option></select>
+      <label class="field" for="redact">Redaction method</label>
+      <select id="redact"><option value="fill">Solid fill (irreversible)</option><option value="blur">Blur (weaker)</option><option value="pixelate">Pixelate (weaker)</option></select>
+      <label class="field" for="dates">Dates</label>
+      <select id="dates"><option value="remove">Remove (Basic Profile)</option><option value="shift">Shift per patient</option><option value="keep">Keep</option></select>
+      <label class="check"><input type="checkbox" id="metaonly"> Metadata only (baseline: skip pixel cleaning)</label>
+      <div class="row" style="margin-top:12px">
+        <button class="primary" id="run" disabled>De-identify files</button>
+        <button id="demo" title="Generate synthetic files with fake PHI, some already 'anonymized' in the header only">Run synthetic demo</button>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <h2>Runs</h2>
+      <ul class="jobs" id="jobs"><li class="muted">No runs yet</li></ul>
+    </div>
+  </aside>
+  <main>
+    <div class="panel" id="main"><div class="empty">Start a run with your files, or try the synthetic demo. The demo includes files whose headers already look anonymized but whose pixels still show a patient name.</div></div>
+    <div class="panel" id="detail" style="margin-top:16px;display:none"></div>
+  </main>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const pct = x => x == null ? "n/a" : (100 * x).toFixed(1) + "%";
+let picked = [], current = null, currentFile = null, timer = null;
+
+fetch("/api/info").then(r => r.json()).then(i => { $("#ver").textContent = "v" + i.version; $("#disc").title = i.disclaimer; });
+
+const drop = $("#drop"), input = $("#file");
+drop.onclick = () => input.click();
+input.onchange = () => setPicked([...input.files]);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); setPicked([...e.dataTransfer.files]); };
+function setPicked(f) { picked = f; $("#picked").textContent = f.length ? `${f.length} file(s) selected` : ""; $("#run").disabled = !f.length; }
+
+function opts(fd) {
+  fd.append("policy", $("#policy").value); fd.append("redact", $("#redact").value);
+  fd.append("dates", $("#dates").value); fd.append("metadata_only", $("#metaonly").checked);
+  return fd;
+}
+$("#run").onclick = async () => {
+  const fd = opts(new FormData()); picked.forEach(f => fd.append("files", f));
+  $("#run").disabled = true;
+  const j = await (await fetch("/api/jobs", {method: "POST", body: fd})).json();
+  setPicked([]); input.value = ""; select(j.id);
+};
+$("#demo").onclick = async () => {
+  const fd = opts(new FormData()); fd.append("n", 8);
+  const j = await (await fetch("/api/demo", {method: "POST", body: fd})).json();
+  select(j.id);
+};
+
+async function loadJobs() {
+  const jobs = await (await fetch("/api/jobs")).json();
+  $("#jobs").innerHTML = jobs.length ? jobs.map(j => `<li data-id="${j.id}" class="${j.id === current ? "sel" : ""}">
+     <div><div class="lbl">${esc(j.label)}</div><div class="sub">${new Date(j.created * 1000).toLocaleString()}</div></div>
+     <span class="chip ${j.state}">${j.state}</span></li>`).join("") : `<li class="muted">No runs yet</li>`;
+  document.querySelectorAll("#jobs li[data-id]").forEach(li => li.onclick = () => select(li.dataset.id));
+}
+
+function select(id) { current = id; currentFile = null; $("#detail").style.display = "none"; loadJobs(); poll(); }
+
+async function poll() {
+  clearTimeout(timer);
+  if (!current) return;
+  const j = await (await fetch(`/api/jobs/${current}`)).json();
+  renderJob(j);
+  loadJobs();
+  if (j.state === "queued" || j.state === "running") timer = setTimeout(poll, 1500);
+}
+
+function renderJob(j) {
+  const p = j.progress || {done: 0, total: 0}, s = j.summary;
+  let h = `<div class="row" style="justify-content:space-between"><div><h2 style="margin:0">${esc(j.label)}</h2>
+      <div class="muted" style="font-size:12px">${esc(j.id)} · policy ${esc(j.options.policy)} · ${esc(j.options.redact)} · dates ${esc(j.options.dates)}${j.options.metadata_only ? " · <b>metadata only</b>" : ""}</div></div>
+      <div class="row"><span class="chip ${j.state}">${j.state}</span>
+      ${j.state === "done" ? `<a href="/api/jobs/${j.id}/report.html" target="_blank"><button>Audit report</button></a>
+      <a href="/api/jobs/${j.id}/download.zip"><button>Download clean files</button></a>` : ""}
+      ${["done", "error", "interrupted"].includes(j.state) ? `<button id="del" title="Delete this run and its files">Delete</button>` : ""}</div></div>`;
+  if (j.state !== "done") h += `<div class="bar"><i style="width:${p.total ? 100 * p.done / p.total : 3}%"></i></div><div class="muted" style="font-size:12px;margin-top:4px">${p.done}/${p.total || "?"} files${j.state === "queued" ? " · waiting" : ""}${j.state === "running" && !p.done ? " · loading OCR model" : ""}</div>`;
+  if (j.error) h += `<div class="alert">${esc(j.error)}</div>`;
+  if (s) {
+    const c = s.status_counts;
+    h += `<div class="cards">
+      <div class="card"><b>${s.files}</b><span>files</span></div>
+      <div class="card"><b>${pct(s.audit_pass_rate_strict)}</b><span>audit pass (strict)</span></div>
+      <div class="card"><b>${pct(s.audit_pass_rate_with_warnings)}</b><span>pass incl. warnings</span></div>
+      <div class="card"><b style="color:var(--fail)">${c.FAIL + c.ERROR}</b><span>failed / errors (quarantined)</span></div>
+      <div class="card"><b>${s.redacted_pixel_regions}</b><span>pixel regions redacted</span></div>
+      <div class="card"><b>${s.metadata_changes}</b><span>metadata changes</span></div>
+      <div class="card"><b>${s.seconds_per_file_mean}s</b><span>mean per file</span></div></div>`;
+    const leaks = (j.files || []).filter(f => /PHI rules still readable/.test(f.issue));
+    if (leaks.length) h += `<div class="alert"><b>${leaks.length} file(s) still show identifying text in the pixels.</b> ${j.options.metadata_only ? "The headers are clean, but the images are not. Run again with pixel cleaning to fix this." : "These files were quarantined, so review them by hand."}</div>`;
+  }
+  const files = j.files || [];
+  if (files.length) {
+    h += `<div class="tablewrap"><table><thead><tr><th>#</th><th>status</th><th>modality</th><th>pixel regions</th><th>tag changes</th><th>time</th><th>first issue</th></tr></thead><tbody>` +
+      files.map(f => `<tr class="f ${f.index === currentFile ? "sel" : ""}" data-i="${f.index}"><td>${f.index}</td><td><span class="chip ${f.status}">${f.status}</span></td><td>${esc(f.modality)}</td>
+      <td>${f.regions}</td><td>${f.tag_changes}</td><td>${f.seconds == null ? "" : f.seconds.toFixed(1) + "s"}</td><td class="issue">${esc(f.issue)}</td></tr>`).join("") + `</tbody></table></div>`;
+  }
+  $("#main").innerHTML = h;
+  const del = $("#del");
+  if (del) del.onclick = async () => { if (!confirm("Delete this run, its uploads and outputs from disk?")) return; await fetch(`/api/jobs/${j.id}`, {method: "DELETE"}); current = null; $("#main").innerHTML = `<div class="empty">Run deleted.</div>`; $("#detail").style.display = "none"; loadJobs(); };
+  if (j.state === "done") document.querySelectorAll("tr.f").forEach(tr => tr.onclick = () => showFile(j.id, +tr.dataset.i));
+}
+
+async function showFile(jid, i) {
+  currentFile = i;
+  document.querySelectorAll("tr.f").forEach(tr => tr.classList.toggle("sel", +tr.dataset.i === i));
+  const r = await (await fetch(`/api/jobs/${jid}/files/${i}`)).json();
+  const px = r.pixel || {}, regions = px.text_regions || [];
+  const residual = (r.checks || []).find(c => c.id === "pixel.residual_text");
+  const leakBoxes = residual && residual.status !== "PASS" ? residual.details.filter(d => d.bbox) : [];
+  const box = (b, cls, dash) => `<rect x="${b[0]}" y="${b[1]}" width="${b[2] - b[0]}" height="${b[3] - b[1]}" fill="none" stroke="var(--${cls})" stroke-width="2" vector-effect="non-scaling-stroke" ${dash ? 'stroke-dasharray="5 3"' : ""}/>`;
+  const before = regions.map(d => box(d.bbox, d.decision === "redact" ? "fail" : d.decision === "keep" ? "keep" : "review")).join("");
+  const after = leakBoxes.map(d => box(d.bbox, d.categories.includes("UNRECOGNIZED_TEXT") ? "review" : "fail", true)).join("");
+  const img = (which, overlay, cap) => `<div><div class="imgcap">${cap}</div>` + (r.previews[which] ? `<div class="img"><img alt="${cap} image" src="/api/jobs/${jid}/preview/${i}/${which}.png" onload="this.nextElementSibling.setAttribute('viewBox','0 0 '+this.naturalWidth+' '+this.naturalHeight)"><svg preserveAspectRatio="none">${overlay}</svg></div>` : `<div class="img empty">no preview</div>`) + `</div>`;
+  const leak = residual && residual.status === "FAIL";
+  let h = `<div class="row" style="justify-content:space-between"><h2 style="margin:0">File #${i} · ${esc(r.modality || "")} <span class="chip ${r.status}">${r.status}</span></h2><span class="mono muted">${esc(r.output || "")}</span></div>`;
+  if (r.error) h += `<div class="alert">${esc(r.error)}</div>`;
+  if (leak) h += `<div class="alert"><b>Identifying text is still visible in the output pixels:</b> ${esc(residual.details.map(d => d.categories.join("/")).join(", "))}. The file was quarantined.</div>`;
+  else if (px.performed && px.redacted_regions) h += `<div class="alert ok">${px.redacted_regions} text region(s) redacted (${(100 * px.redacted_pixel_fraction).toFixed(2)}% of pixels). Pixels outside those regions are ${px.integrity_outside_mask ? "bit-identical to the original" : "<b>NOT</b> identical"}.</div>`;
+  h += `<div class="viewer">${img("before", before, "Original")}${img("after", after, "De-identified")}</div>
+    <div class="legend"><span><i class="sw" style="border-color:var(--fail)"></i>redacted (PHI or unrecognised text)</span><span><i class="sw" style="border-color:var(--keep)"></i>kept clinical annotation</span><span><i class="sw" style="border-color:var(--review)"></i>flagged for review</span><span><i class="sw" style="border-color:var(--fail);border-style:dashed"></i>residual text found by audit</span></div>
+    <div class="tabs"><button data-t="checks" class="on">Audit checks</button><button data-t="text">Burned-in text (${regions.length})</button><button data-t="meta">Metadata changes (${(r.metadata_changes || []).length})</button></div><div id="tab"></div>`;
+  $("#detail").innerHTML = h; $("#detail").style.display = "block";
+  const tabs = {
+    checks: () => `<ul class="checks">${(r.checks || []).map(c => `<li><span class="chip ${c.status}">${c.status}</span><code>${esc(c.id)}</code><span>${esc(c.message)}</span></li>`).join("")}</ul>`,
+    text: () => regions.length ? `<div class="tablewrap"><table><thead><tr><th>decision</th><th>category</th><th>rule</th><th>conf</th><th>text</th></tr></thead><tbody>${regions.map(d => `<tr><td>${esc(d.decision)}</td><td>${esc(d.categories.join(", "))}</td><td class="mono">${esc(d.rules.join(", "))}</td><td>${d.confidence}</td><td class="mono">${esc(d.text || d.preview || "•".repeat(d.text_length))}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">${esc(px.skipped_reason || "No burned-in text detected.")}</p>`,
+    meta: () => `<div class="tablewrap"><table><thead><tr><th>tag</th><th>path</th><th>action</th><th>reason</th><th>new value</th></tr></thead><tbody>${(r.metadata_changes || []).map(c => `<tr><td class="mono">${esc(c.tag)}</td><td class="mono">${esc(c.path)}</td><td>${esc(c.action)}</td><td>${esc(c.reason)}</td><td class="mono">${esc(c.new || "")}</td></tr>`).join("")}</tbody></table></div><p class="muted" style="font-size:12px">Original values are never stored. Each removed value is recorded only as a keyed hash and its length.</p>`,
+  };
+  const setTab = t => { document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.t === t)); $("#tab").innerHTML = tabs[t](); };
+  document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => setTab(b.dataset.t));
+  setTab("checks");
+  $("#detail").scrollIntoView({behavior: "smooth", block: "start"});
+}
+loadJobs();
+</script>
+</body>
+</html>
