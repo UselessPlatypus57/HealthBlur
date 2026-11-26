@@ -326,7 +326,12 @@ def cmd_serve(a) -> int:
         print(f"WARNING: binding to {a.host} exposes uploaded PHI to your network. Only do this on a trusted network.")
         hosts.append(a.host)
     print(f"PixelGuard dashboard on http://{a.host}:{a.port}  (data stays on this machine)")
-    uvicorn.run(create_app(Path(a.workdir), allowed_hosts=hosts, max_upload_mb=a.max_upload_mb), host=a.host, port=a.port, log_level="warning")
+    keep = "kept until the run is deleted" if a.keep_uploads else "deleted as soon as each run finishes"
+    life = f"runs auto-delete after {a.retention_hours:g} h" if a.retention_hours > 0 else "runs are kept until you delete them"
+    print(f"Uploaded originals are {keep}; {life}.")
+    app = create_app(Path(a.workdir), allowed_hosts=hosts, max_upload_mb=a.max_upload_mb,
+                     retention_hours=a.retention_hours, keep_uploads=a.keep_uploads)
+    uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
     return 0
 
 
@@ -398,6 +403,9 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--workdir", default="pixelguard_jobs", help="where uploaded files and job outputs are kept")
     sv.add_argument("--allow-host", action="append", help="extra Host name the dashboard may be reached by (repeatable)")
     sv.add_argument("--max-upload-mb", type=int, default=2048, help="largest accepted upload per run (default 2048 MB)")
+    sv.add_argument("--retention-hours", type=float, default=24.0,
+                    help="delete each run (outputs, reports and PHI-bearing 'before' previews) after this many hours; 0 = keep (default 24)")
+    sv.add_argument("--keep-uploads", action="store_true", help="keep original uploads after processing (default: delete them immediately)")
     sv.set_defaults(func=cmd_serve)
     return p
 

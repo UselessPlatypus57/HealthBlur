@@ -193,6 +193,17 @@ locked to this machine:
 `--host 0.0.0.0` prints a warning. Use `--allow-host NAME` to reach the
 dashboard by another name on a trusted network.
 
+It also keeps PHI on disk for as short a time as possible:
+- **Original uploads are deleted as soon as a run finishes**, whether it
+  succeeded or failed. The de-identified outputs and the report are kept.
+  Uploads left behind by a run interrupted by a restart are deleted when
+  the dashboard starts.
+- **Whole runs are deleted after 24 hours**, including the "before"
+  previews, which show PHI. Change this with `--retention-hours N`, or use
+  `0` to keep runs until you delete them.
+- `--keep-uploads` keeps the originals with each run.
+- Each run shows when it will be deleted.
+
 ## Measuring it
 
 ```powershell
@@ -311,7 +322,7 @@ recall needs box annotations, so for external data rely on
 ## Tests
 
 ```powershell
-pytest              # 101 fast tests (fake OCR replays ground truth); CI runs them on Ubuntu and Windows
+pytest              # 107 fast tests (fake OCR replays ground truth); CI runs them on Ubuntu and Windows
 pytest -m ocr       # end-to-end with the real EasyOCR model
 ```
 

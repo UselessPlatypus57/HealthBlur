@@ -1,5 +1,9 @@
 """Local web dashboard (FastAPI). Binds to 127.0.0.1 by default; uploaded
-files and outputs stay in the work directory on this machine."""
+files and outputs stay in the work directory on this machine.
+
+PHI is kept on disk for as short a time as possible: original uploads are
+deleted as soon as a run finishes (whatever its outcome), and whole runs,
+including the "before" previews, are deleted after a retention period."""
 
 from __future__ import annotations
 
@@ -24,15 +28,57 @@ from ..report import write_reports
 STATIC = Path(__file__).parent / "static"
 
 
+DEFAULT_RETENTION_HOURS = 24.0
+PURGE_INTERVAL_SECONDS = 600
+
+
 class JobManager:
-    def __init__(self, workdir: Path, engine=None):
+    def __init__(self, workdir: Path, engine=None, *, retention_hours: float = DEFAULT_RETENTION_HOURS, keep_uploads: bool = False):
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.engine = engine  # injected in tests; None = EasyOCR
+        self.retention_hours = retention_hours  # <= 0 disables automatic deletion
+        self.keep_uploads = keep_uploads
         self.jobs: dict[str, dict] = {}
         self.q: queue.Queue = queue.Queue()
+        self._lock = threading.Lock()
         self._load_existing()
+        self.purge_expired()
         threading.Thread(target=self._worker, daemon=True).start()
+        if self.retention_hours > 0:
+            threading.Thread(target=self._janitor, daemon=True).start()
+
+    # ------------------------------------------------------------ retention
+    def _expires(self, created: float) -> float | None:
+        return created + self.retention_hours * 3600 if self.retention_hours > 0 else None
+
+    def delete_uploads(self, job: dict) -> None:
+        """Remove the original (PHI-bearing) uploads of a finished run."""
+        if self.keep_uploads:
+            return
+        shutil.rmtree(self.workdir / job["id"] / "input", ignore_errors=True)
+        job["uploads_deleted"] = True
+
+    def purge_expired(self, now: float | None = None) -> list[str]:
+        """Delete finished runs older than the retention period."""
+        now = time.time() if now is None else now
+        removed = []
+        with self._lock:
+            for jid, job in list(self.jobs.items()):
+                exp = job.get("expires")
+                if exp is not None and exp <= now and job.get("state") not in ("queued", "running"):
+                    shutil.rmtree(self.workdir / jid, ignore_errors=True)
+                    self.jobs.pop(jid, None)
+                    removed.append(jid)
+        return removed
+
+    def _janitor(self):
+        while True:
+            time.sleep(PURGE_INTERVAL_SECONDS)
+            try:
+                self.purge_expired()
+            except Exception:
+                pass
 
     def _load_existing(self):
         for d in sorted(self.workdir.iterdir()):
@@ -41,7 +87,13 @@ class JobManager:
                 try:
                     job = json.loads(jf.read_text(encoding="utf-8"))
                     if job.get("state") in ("queued", "running"):
-                        job["state"] = "interrupted"
+                        job["state"] = "interrupted"  # cannot resume
+                    if not job.get("uploads_deleted"):
+                        # Runs from before a restart are never running now, so
+                        # their originals (including interrupted ones) can go.
+                        self.delete_uploads(job)
+                        self._save(job)
+                    job["expires"] = self._expires(job.get("created", 0))
                     self.jobs[job["id"]] = job
                 except Exception:
                     pass
@@ -52,8 +104,9 @@ class JobManager:
     def create(self, options: dict, label: str) -> dict:
         jid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
         (self.workdir / jid / "input").mkdir(parents=True)
-        job = {"id": jid, "label": label, "state": "queued", "created": time.time(), "options": options,
-               "progress": {"done": 0, "total": 0}, "summary": None, "files": [], "error": None}
+        now = time.time()
+        job = {"id": jid, "label": label, "state": "queued", "created": now, "expires": self._expires(now), "options": options,
+               "progress": {"done": 0, "total": 0}, "summary": None, "files": [], "error": None, "uploads_deleted": False}
         self.jobs[jid] = job
         return job
 
@@ -71,7 +124,10 @@ class JobManager:
                 self._run(job)
             except Exception as exc:
                 job["state"], job["error"] = "error", f"{type(exc).__name__}: {exc}"
-                self._save(job)
+            finally:
+                self.delete_uploads(job)  # success or failure, originals go
+                if (self.workdir / jid).exists():
+                    self._save(job)
 
     def _run(self, job):
         root = self.workdir / job["id"]
@@ -102,7 +158,6 @@ class JobManager:
         job["files"] = [_light(r) for r in rep["files"]]
         job["summary"] = rep["summary"]
         job["state"] = "done"
-        self._save(job)
 
 
 def _light(rec: dict) -> dict:
@@ -164,9 +219,10 @@ def _security_middleware(app: FastAPI, allowed_hosts: set[str], max_upload_bytes
         return response
 
 
-def create_app(workdir: Path, engine=None, *, allowed_hosts=LOOPBACK_HOSTS, max_upload_mb: int = DEFAULT_MAX_UPLOAD_MB) -> FastAPI:
+def create_app(workdir: Path, engine=None, *, allowed_hosts=LOOPBACK_HOSTS, max_upload_mb: int = DEFAULT_MAX_UPLOAD_MB,
+               retention_hours: float = DEFAULT_RETENTION_HOURS, keep_uploads: bool = False) -> FastAPI:
     app = FastAPI(title="PixelGuard", version=__version__, docs_url=None, redoc_url=None)
-    jm = JobManager(workdir, engine)
+    jm = JobManager(workdir, engine, retention_hours=retention_hours, keep_uploads=keep_uploads)
     app.state.jobs = jm
     max_bytes = max_upload_mb * 1024 * 1024
     _security_middleware(app, {_hostname(h) for h in allowed_hosts}, max_bytes)
@@ -196,11 +252,13 @@ def create_app(workdir: Path, engine=None, *, allowed_hosts=LOOPBACK_HOSTS, max_
 
     @app.get("/api/info")
     def info():
-        return {"version": __version__, "disclaimer": DISCLAIMER}
+        return {"version": __version__, "disclaimer": DISCLAIMER,
+                "retention_hours": jm.retention_hours if jm.retention_hours > 0 else None, "keep_uploads": jm.keep_uploads}
 
     @app.get("/api/jobs")
     def list_jobs():
-        return [{k: j[k] for k in ("id", "label", "state", "created", "progress", "summary")} for j in sorted(jm.jobs.values(), key=lambda j: -j["created"])]
+        jm.purge_expired()
+        return [{k: j.get(k) for k in ("id", "label", "state", "created", "expires", "progress", "summary")} for j in sorted(jm.jobs.values(), key=lambda j: -j["created"])]
 
     @app.post("/api/jobs")
     async def create_job(files: list[UploadFile] = File(...), policy: str = Form("conservative"), redact: str = Form("fill"),

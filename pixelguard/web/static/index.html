@@ -19,7 +19,8 @@ header{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:
 header h1{font-size:17px;margin:0;letter-spacing:.2px} header .ver{color:var(--mut);font-size:12px}
 .disc{margin-left:auto;font-size:12px;color:var(--warn);border:1px solid var(--warn);border-radius:999px;padding:3px 10px;cursor:help;white-space:nowrap}
 .wrap{display:grid;grid-template-columns:320px 1fr;gap:16px;padding:16px 20px;max-width:1500px;margin:0 auto}
-@media (max-width:900px){.wrap{grid-template-columns:1fr;padding:12px 16px}.disc{display:none}}
+.wrap>*{min-width:0} select{max-width:100%}
+@media (max-width:900px){.wrap{grid-template-columns:minmax(0,1fr);padding:12px 16px}.disc{display:none}}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}
 .panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--mut);margin:0 0 10px}
 label.field{display:block;font-size:12px;color:var(--mut);margin:8px 0 3px}
@@ -94,6 +95,7 @@ tbody tr.f{cursor:pointer} tbody tr.f:hover{background:var(--soft)} tbody tr.sel
     </div>
     <div class="panel" style="margin-top:16px">
       <h2>Runs</h2>
+      <p class="muted" id="retention" style="font-size:12px;margin:-4px 0 8px"></p>
       <ul class="jobs" id="jobs"><li class="muted">No runs yet</li></ul>
     </div>
   </aside>
@@ -108,7 +110,16 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const pct = x => x == null ? "n/a" : (100 * x).toFixed(1) + "%";
 let picked = [], current = null, currentFile = null, timer = null;
 
-fetch("/api/info").then(r => r.json()).then(i => { $("#ver").textContent = "v" + i.version; $("#disc").title = i.disclaimer; });
+fetch("/api/info").then(r => r.json()).then(i => {
+  $("#ver").textContent = "v" + i.version; $("#disc").title = i.disclaimer;
+  $("#retention").textContent = (i.keep_uploads ? "Uploaded originals are kept with each run. " : "Uploaded originals are deleted as soon as a run finishes. ")
+    + (i.retention_hours ? `Runs, including PHI-showing previews, are deleted after ${i.retention_hours} h.` : "Runs are kept until you delete them.");
+});
+const expiresIn = ts => {
+  if (!ts) return "";
+  const m = Math.max(0, Math.round((ts * 1000 - Date.now()) / 60000));
+  return m >= 90 ? `deletes in ${Math.round(m / 60)} h` : `deletes in ${m} min`;
+};
 
 const drop = $("#drop"), input = $("#file");
 drop.onclick = () => input.click();
@@ -138,7 +149,7 @@ $("#demo").onclick = async () => {
 async function loadJobs() {
   const jobs = await (await fetch("/api/jobs")).json();
   $("#jobs").innerHTML = jobs.length ? jobs.map(j => `<li data-id="${j.id}" class="${j.id === current ? "sel" : ""}">
-     <div><div class="lbl">${esc(j.label)}</div><div class="sub">${new Date(j.created * 1000).toLocaleString()}</div></div>
+     <div><div class="lbl">${esc(j.label)}</div><div class="sub">${new Date(j.created * 1000).toLocaleString()}${j.expires ? " · " + expiresIn(j.expires) : ""}</div></div>
      <span class="chip ${j.state}">${j.state}</span></li>`).join("") : `<li class="muted">No runs yet</li>`;
   document.querySelectorAll("#jobs li[data-id]").forEach(li => li.onclick = () => select(li.dataset.id));
 }
@@ -157,7 +168,8 @@ async function poll() {
 function renderJob(j) {
   const p = j.progress || {done: 0, total: 0}, s = j.summary;
   let h = `<div class="row" style="justify-content:space-between"><div><h2 style="margin:0">${esc(j.label)}</h2>
-      <div class="muted" style="font-size:12px">${esc(j.id)} · policy ${esc(j.options.policy)} · ${esc(j.options.redact)} · dates ${esc(j.options.dates)}${j.options.metadata_only ? " · <b>metadata only</b>" : ""}</div></div>
+      <div class="muted" style="font-size:12px">${esc(j.id)} · policy ${esc(j.options.policy)} · ${esc(j.options.redact)} · dates ${esc(j.options.dates)}${j.options.metadata_only ? " · <b>metadata only</b>" : ""}
+      · ${j.uploads_deleted ? "originals deleted" : (j.options.synthetic ? "synthetic input" : "originals deleted when finished")}${j.expires ? " · " + expiresIn(j.expires) : ""}</div></div>
       <div class="row"><span class="chip ${j.state}">${j.state}</span>
       ${j.state === "done" ? `<a href="/api/jobs/${j.id}/report.html" target="_blank"><button>Audit report</button></a>
       <a href="/api/jobs/${j.id}/download.zip"><button>Download clean files</button></a>` : ""}
