@@ -116,10 +116,60 @@ def _light(rec: dict) -> dict:
     }
 
 
-def create_app(workdir: Path, engine=None) -> FastAPI:
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+DEFAULT_MAX_UPLOAD_MB = 2048
+
+
+def _hostname(value: str) -> str:
+    """'127.0.0.1:8765' -> '127.0.0.1', '[::1]:8765' -> '::1', 'http://x:1' -> 'x'."""
+    v = value.strip().lower()
+    if "://" in v:
+        v = v.split("://", 1)[1].split("/", 1)[0]
+    if v.startswith("["):
+        return v[1 : v.find("]")] if "]" in v else v
+    return v.rsplit(":", 1)[0] if v.count(":") == 1 else v
+
+
+def _security_middleware(app: FastAPI, allowed_hosts: set[str], max_upload_bytes: int) -> None:
+    """The dashboard serves PHI (uploads and 'before' previews), so it only
+    answers requests that genuinely come from this machine's browser tab:
+
+    * Host header must be a loopback name: blocks DNS-rebinding pages that
+      point their own domain at 127.0.0.1 to read job results.
+    * State-changing requests must not come from another origin: blocks any
+      website you visit from silently submitting or deleting jobs.
+    * Request bodies are capped, and responses are not cached or framed.
+    """
+
+    @app.middleware("http")
+    async def guard(request, call_next):
+        from fastapi.responses import PlainTextResponse
+
+        if _hostname(request.headers.get("host", "")) not in allowed_hosts:
+            return PlainTextResponse("host not allowed", status_code=403)
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            origin = request.headers.get("origin")
+            if origin and _hostname(origin) not in allowed_hosts:
+                return PlainTextResponse("cross-origin request refused", status_code=403)
+            if request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
+                return PlainTextResponse("cross-site request refused", status_code=403)
+            length = request.headers.get("content-length")
+            if length and length.isdigit() and int(length) > max_upload_bytes:
+                return PlainTextResponse("upload too large", status_code=413)
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+
+def create_app(workdir: Path, engine=None, *, allowed_hosts=LOOPBACK_HOSTS, max_upload_mb: int = DEFAULT_MAX_UPLOAD_MB) -> FastAPI:
     app = FastAPI(title="PixelGuard", version=__version__, docs_url=None, redoc_url=None)
     jm = JobManager(workdir, engine)
     app.state.jobs = jm
+    max_bytes = max_upload_mb * 1024 * 1024
+    _security_middleware(app, {_hostname(h) for h in allowed_hosts}, max_bytes)
 
     def job_or_404(jid: str) -> dict:
         job = jm.jobs.get(jid)
@@ -159,10 +209,18 @@ def create_app(workdir: Path, engine=None) -> FastAPI:
         _validate(opts)
         job = jm.create(opts, f"{len(files)} uploaded file(s)")
         dest = jm.workdir / job["id"] / "input"
+        total = 0
         for i, f in enumerate(files):
             # Uploaded file names can contain PHI; store under neutral names.
             with open(dest / f"upload_{i:05d}.dcm", "wb") as fh:
-                shutil.copyfileobj(f.file, fh)
+                while chunk := f.file.read(1 << 20):
+                    total += len(chunk)
+                    if total > max_bytes:  # chunked uploads carry no Content-Length
+                        fh.close()
+                        shutil.rmtree(jm.workdir / job["id"], ignore_errors=True)
+                        jm.jobs.pop(job["id"], None)
+                        raise HTTPException(413, "upload too large")
+                    fh.write(chunk)
         jm.submit(job)
         return job
 

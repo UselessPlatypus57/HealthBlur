@@ -72,8 +72,32 @@ def is_clinical_token(tok: str) -> bool:
     if tok.startswith("X") and len(tok) > 1 and set(tok[1:]) <= set("0123456789SOILZ.,"):
         if any(p.match("X" + tok[1:].translate(_DIGIT_FIX)) for p in _CLINICAL_TOKEN_PATTERNS):
             return True  # xl.5 -> x1.5
+    # OCR dropped a space: "AXT2" = "AX" + "T2". Only for tokens containing a
+    # digit, so that no name can be spelled out of short clinical words.
+    if any(ch.isdigit() for ch in tok) and _splits_into_clinical(tok):
+        return True
     # tolerate one OCR slip in longer clinical words (FLAR -> FLAIR)
     return len(tok) >= 4 and tok.isalpha() and bool(get_close_matches(tok, _FUZZY_VOCAB, n=1, cutoff=0.85))
+
+
+_COMPOUND_PARTS = frozenset(t for t in CLINICAL_TOKENS if len(t) >= 2)
+
+
+def _splits_into_clinical(tok: str, max_parts: int = 3) -> bool:
+    """True if ``tok`` is a concatenation of 2..max_parts clinical tokens (each
+    at least two characters) or short numbers."""
+
+    def part_ok(p: str) -> bool:
+        return p in _COMPOUND_PARTS or (p.isdigit() and len(p) <= 4)
+
+    def rec(s: str, parts: int) -> bool:
+        if not s:
+            return parts >= 2
+        if parts == max_parts:
+            return False
+        return any(part_ok(s[:i]) and rec(s[i:], parts + 1) for i in range(2 if not s[0].isdigit() else 1, len(s) + 1))
+
+    return len(tok) <= 12 and rec(tok, 0)
 
 
 def is_clinical_text(text: str) -> bool:

@@ -319,10 +319,14 @@ def _corner(bbox, shape):
 def cmd_serve(a) -> int:
     import uvicorn
 
-    from .web.app import create_app
+    from .web.app import LOOPBACK_HOSTS, create_app
 
-    print(f"PixelGuard dashboard on http://{a.host}:{a.port}  (local only; data stays on this machine)")
-    uvicorn.run(create_app(Path(a.workdir)), host=a.host, port=a.port, log_level="warning")
+    hosts = list(LOOPBACK_HOSTS) + list(a.allow_host or [])
+    if a.host not in LOOPBACK_HOSTS:
+        print(f"WARNING: binding to {a.host} exposes uploaded PHI to your network. Only do this on a trusted network.")
+        hosts.append(a.host)
+    print(f"PixelGuard dashboard on http://{a.host}:{a.port}  (data stays on this machine)")
+    uvicorn.run(create_app(Path(a.workdir), allowed_hosts=hosts, max_upload_mb=a.max_upload_mb), host=a.host, port=a.port, log_level="warning")
     return 0
 
 
@@ -392,6 +396,8 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8765)
     sv.add_argument("--workdir", default="pixelguard_jobs", help="where uploaded files and job outputs are kept")
+    sv.add_argument("--allow-host", action="append", help="extra Host name the dashboard may be reached by (repeatable)")
+    sv.add_argument("--max-upload-mb", type=int, default=2048, help="largest accepted upload per run (default 2048 MB)")
     sv.set_defaults(func=cmd_serve)
     return p
 

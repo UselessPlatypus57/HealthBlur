@@ -85,3 +85,13 @@ def test_ocr_slips_in_clinical_text(text):
 @pytest.mark.parametrize("text", ["SOLO", "LIZ", "Okafor", "ZOE"])
 def test_slip_normalisation_does_not_whitelist_words(text):
     assert not is_clinical_text(text)
+
+
+@pytest.mark.parametrize("text", ["AXT2 FLAIR", "SAGT1", "COR3D"])
+def test_merged_clinical_tokens(text):
+    assert is_clinical_text(text)
+
+
+@pytest.mark.parametrize("text", ["SEMA", "TRISTAN", "MRN1234567", "A1234567", "LEE2"])
+def test_merged_token_rule_does_not_whitelist_names_or_ids(text):
+    assert not is_clinical_text(text)

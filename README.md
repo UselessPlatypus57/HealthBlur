@@ -1,5 +1,7 @@
 # PixelGuard (HealthBlur)
 
+[![tests](https://github.com/UselessPlatypus57/HealthBlur/actions/workflows/tests.yml/badge.svg)](https://github.com/UselessPlatypus57/HealthBlur/actions/workflows/tests.yml)
+
 **Stop medical images from leaking patient identities.**
 
 DICOM files can identify a patient in two places: the **header** (name, MRN,
@@ -178,7 +180,18 @@ The dashboard can:
 - list the audit checks and the metadata changes;
 - download the clean files (quarantined files are excluded).
 
-It binds to localhost only, and uploads are stored under neutral names.
+Because the dashboard holds PHI (uploads and "before" previews), it is
+locked to this machine:
+- It binds to `127.0.0.1` and stores uploads under neutral names.
+- It answers only requests whose `Host` is a loopback name, which blocks
+  DNS-rebinding pages that point their own domain at your machine.
+- It refuses state-changing requests from any other origin, so a website
+  you visit cannot submit or delete jobs.
+- Uploads are capped (`--max-upload-mb`, default 2048), and responses are
+  never cached or framed.
+
+`--host 0.0.0.0` prints a warning. Use `--allow-host NAME` to reach the
+dashboard by another name on a trusted network.
 
 ## Measuring it
 
@@ -253,6 +266,28 @@ How to read this:
   and multi-frame projections), once to clean and again to audit.
   `--no-verify` roughly halves the time, but is not recommended.
 
+**Check on unseen data.** The detection rules were tuned while looking at
+seed 7, so the default configuration was also measured on a seed it had
+never seen. Command:
+`pixelguard benchmark --seed 101 --n 18 --variants conservative`.
+
+Test set: 62 burned-in PHI regions, 54 clinical annotations and 233 header
+PHI values.
+
+| conservative (default) | seed 7 (tuned on) | seed 101 (unseen) |
+|---|---|---|
+| pixel PHI recall (normal / hard) | 100 % / 100 % | 100 % / 100 % |
+| pixel FP rate | 3.3 % | 3.7 % |
+| metadata PHI recall, clinical retention | 100 %, 100 % | 100 %, 100 % |
+| audit PASS / FAIL | 30 / 0 | 18 / 0 |
+
+The unseen seed exposed one general gap: at 11 px, OCR drops spaces
+(`AX T2` → `AXT2`). Merged clinical tokens are now accepted, but only when
+they contain a digit, so no name can be spelled out of short clinical words.
+That fix lowered the unseen-seed false-positive rate from 7.4 % to 3.7 %.
+The rest are 9 px labels that cannot be read at all, and the conservative
+policy blacks those out on purpose.
+
 These numbers come from synthetic data with known ground truth. They show
 how the configurations compare. They are **not** evidence of performance on
 your scanners and fonts, so validate on a representative, labelled sample
@@ -276,7 +311,7 @@ recall needs box annotations, so for external data rely on
 ## Tests
 
 ```powershell
-pytest              # 89 fast tests (fake OCR replays ground truth)
+pytest              # 101 fast tests (fake OCR replays ground truth); CI runs them on Ubuntu and Windows
 pytest -m ocr       # end-to-end with the real EasyOCR model
 ```
 

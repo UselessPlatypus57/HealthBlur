@@ -18,7 +18,7 @@ def _wait(client, jid, timeout=60):
 
 def test_upload_run_inspect_delete(tmp_path, synth_dir):
     app = create_app(tmp_path / "jobs", engine=StaticOCREngine())
-    c = TestClient(app)
+    c = TestClient(app, base_url="http://127.0.0.1:8765")
     assert "PixelGuard" in c.get("/").text
     f = sorted(synth_dir.glob("*.dcm"))[0]
     r = c.post("/api/jobs", files=[("files", (f.name, f.read_bytes(), "application/dicom"))], data={"policy": "conservative"})
@@ -39,8 +39,34 @@ def test_upload_run_inspect_delete(tmp_path, synth_dir):
 
 
 def test_demo_job_and_validation(tmp_path):
-    c = TestClient(create_app(tmp_path / "jobs", engine=StaticOCREngine()))
+    c = TestClient(create_app(tmp_path / "jobs", engine=StaticOCREngine()), base_url="http://127.0.0.1:8765")
     assert c.post("/api/demo", data={"n": 2, "policy": "nonsense"}).status_code == 422
     jid = c.post("/api/demo", data={"n": 2}).json()["id"]
     j = _wait(c, jid)
     assert j["state"] == "done" and j["summary"]["files"] == 2
+
+
+def test_dns_rebinding_host_is_refused(tmp_path):
+    c = TestClient(create_app(tmp_path / "jobs", engine=StaticOCREngine()), base_url="http://evil.example:8765")
+    assert c.get("/api/jobs").status_code == 403
+    for host in ("http://localhost:8765", "http://127.0.0.1:8765", "http://[::1]:8765"):
+        assert TestClient(create_app(tmp_path / "jobs", engine=StaticOCREngine()), base_url=host).get("/api/jobs").status_code == 200
+
+
+def test_cross_site_writes_are_refused(tmp_path):
+    c = TestClient(create_app(tmp_path / "jobs", engine=StaticOCREngine()), base_url="http://127.0.0.1:8765")
+    r = c.post("/api/demo", data={"n": 1}, headers={"Origin": "https://some-website.example"})
+    assert r.status_code == 403
+    r = c.post("/api/demo", data={"n": 1}, headers={"Sec-Fetch-Site": "cross-site"})
+    assert r.status_code == 403
+    ok = c.post("/api/demo", data={"n": 1}, headers={"Origin": "http://127.0.0.1:8765", "Sec-Fetch-Site": "same-origin"})
+    assert ok.status_code == 200
+    assert ok.headers["x-frame-options"] == "DENY" and ok.headers["cache-control"] == "no-store"
+
+
+def test_upload_size_limit(tmp_path):
+    c = TestClient(create_app(tmp_path / "jobs", engine=StaticOCREngine(), max_upload_mb=1), base_url="http://127.0.0.1:8765")
+    big = b"\0" * (2 * 1024 * 1024)
+    r = c.post("/api/jobs", files=[("files", ("a.dcm", big, "application/dicom"))])
+    assert r.status_code == 413
+    assert c.get("/api/jobs").json() == []  # nothing left behind
